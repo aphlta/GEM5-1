@@ -245,12 +245,14 @@ AheadBTB::fillStagePredictions(const std::vector<TickedBTBEntry>& entries,
 {    // S0 prediction source statistic is tracked by AheadBTB
     // AheadBTB always has aheadPipelinedStages > 0
     std::vector<TickedBTBEntry> selected_entries;
+    bool selected_abtb_entries = false;
 
     if (!entries.empty()) {
         // RTL S1 arbitration gives ABTB exclusive priority once ABTB is valid.
         // If these entries later predict not-taken, S1 falls through instead of
         // falling back to an earlier uBTB taken prediction.
         selected_entries = entries;
+        selected_abtb_entries = true;
         btbStats.S0PredUseABTB++;
     } else if (stagePreds[0].btbEntries.size() > 0) {
         DPRINTF(ABTB, "AheadBTB: ABTB miss, keeping uBTB prediction\n");
@@ -267,7 +269,11 @@ AheadBTB::fillStagePredictions(const std::vector<TickedBTBEntry>& entries,
         // Copy BTB entries to stage prediction
         stagePreds[s].btbEntries.clear();
         for (auto e : selected_entries) {
-            stagePreds[s].btbEntries.push_back(BTBEntry(e));
+            auto pred_entry = BTBEntry(e);
+            if (selected_abtb_entries) {
+                pred_entry.source = getComponentIdx();
+            }
+            stagePreds[s].btbEntries.push_back(pred_entry);
         }
         checkAscending(stagePreds[s].btbEntries);
         dumpBTBEntries(stagePreds[s].btbEntries);
@@ -305,9 +311,13 @@ AheadBTB::fillStagePredictions(const std::vector<TickedBTBEntry>& entries,
 void
 AheadBTB::updatePredictionMeta(const std::vector<TickedBTBEntry>& entries,
                                    std::vector<FullBTBPrediction>& stagePreds,
-                                   ThreadID tid)
+                                   ThreadID tid,
+                                   Addr indexPhrHash)
 {
     auto &state = threadState(tid);
+
+    state.meta->valid = !entries.empty();
+    state.meta->indexPhrHash = indexPhrHash;
 
     // Save current BTB entries
     for (auto e: entries) {
@@ -315,6 +325,7 @@ AheadBTB::updatePredictionMeta(const std::vector<TickedBTBEntry>& entries,
     }
 
     state.lastPredEntries = state.meta->hit_entries;
+    state.lastPredIndexPhrHash = state.meta->indexPhrHash;
 }
 
 void
@@ -326,8 +337,9 @@ AheadBTB::putPCHistory(Addr startAddr,
     auto &state = threadState(tid);
     state.meta = std::make_shared<BTBMeta>();
     const uint8_t asidHash = stagePreds.empty() ? 0 : stagePreds.front().asidHash;
+    const Addr indexPhrHash = foldAbtbPhrHash(history);
     // Lookup all matching entries in BTB
-    auto find_entries = lookup(startAddr, tid, asidHash);
+    auto find_entries = lookup(startAddr, tid, asidHash, indexPhrHash);
 
     // Process BTB entries
     auto processed_entries = processEntries(find_entries, startAddr);
@@ -336,7 +348,7 @@ AheadBTB::putPCHistory(Addr startAddr,
     fillStagePredictions(processed_entries, stagePreds);
     
     // Update metadata for later stages
-    updatePredictionMeta(processed_entries, stagePreds, tid);
+    updatePredictionMeta(processed_entries, stagePreds, tid, indexPhrHash);
 }
 
 std::shared_ptr<void>
@@ -380,14 +392,15 @@ AheadBTB::recoverState(const FetchTarget &entry)
  * @return Vector of matching BTB entries
  */
 std::vector<AheadBTB::TickedBTBEntry>
-AheadBTB::lookupSingleBlock(Addr block_pc, ThreadID tid, uint8_t asidHash)
+AheadBTB::lookupSingleBlock(Addr block_pc, ThreadID tid, uint8_t asidHash,
+                            Addr indexPhrHash)
 {
     std::vector<TickedBTBEntry> res;
     if (block_pc & 0x1) {
         return res; // ignore false hit when lowest bit is 1
     }
     auto &state = threadState(tid);
-    Addr btb_idx = getIndex(block_pc, asidHash);
+    Addr btb_idx = getIndex(block_pc, asidHash, indexPhrHash);
     auto btb_set = btb[btb_idx];
     assert(btb_idx < numSets);
     // AheadBTB always uses ahead-pipelined implementation:
@@ -435,7 +448,8 @@ AheadBTB::lookupSingleBlock(Addr block_pc, ThreadID tid, uint8_t asidHash)
 }
 
 std::vector<AheadBTB::TickedBTBEntry>
-AheadBTB::lookup(Addr block_pc, ThreadID tid, uint8_t asidHash)
+AheadBTB::lookup(Addr block_pc, ThreadID tid, uint8_t asidHash,
+                 Addr indexPhrHash)
 {
     std::vector<TickedBTBEntry> res;
     if (block_pc & 0x1) {
@@ -443,7 +457,7 @@ AheadBTB::lookup(Addr block_pc, ThreadID tid, uint8_t asidHash)
     }
 
     // AheadBTB always uses single block lookup
-    res = lookupSingleBlock(block_pc, tid, asidHash);
+    res = lookupSingleBlock(block_pc, tid, asidHash, indexPhrHash);
     return res;
 }
 
@@ -627,11 +641,16 @@ AheadBTB::updateUsingS3Pred(FullBTBPrediction &s3Pred, const Addr previousPC)
         return;
     }
 
-    Addr end_inst_pc = s3Pred.isTaken() ? s3Pred.getTakenEntry().pc :
-                            (s3Pred.bbStart + predictWidth) & ~mask(floorLog2(predictWidth)-1);
-
     // AheadBTB use S3 prediction for update
     auto &state = threadState(s3Pred.tid);
+    if (!s3Pred.isTaken() || state.lastPredEntries.empty()) {
+        DPRINTF(ABTB,
+                "AheadBTB: S3 update skipped, taken %d, meta valid %d\n",
+                s3Pred.isTaken(), !state.lastPredEntries.empty());
+        return;
+    }
+
+    Addr end_inst_pc = s3Pred.getTakenEntry().pc;
     auto old_entries= processOldEntries(state.lastPredEntries, end_inst_pc);
 
     auto entries_to_update = collectEntriesToUpdateFromS3Pred(old_entries,s3Pred);
@@ -643,7 +662,8 @@ AheadBTB::updateUsingS3Pred(FullBTBPrediction &s3Pred, const Addr previousPC)
             DPRINTF(ABTB, "AheadBTB: no previous PC, skipping update\n");
             return;
         }
-        Addr btb_idx = getIndex(previousPC, s3Pred.asidHash);  // use last pc to get idx
+        Addr btb_idx = getIndex(previousPC, s3Pred.asidHash,
+                                state.lastPredIndexPhrHash);  // use last pc to get idx
         BranchInfo takenbranchinfo;
         takenbranchinfo.pc = s3Pred.getTakenEntry().pc;
         takenbranchinfo.target = s3Pred.getTakenEntry().target;
