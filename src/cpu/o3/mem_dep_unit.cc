@@ -59,8 +59,8 @@ MemDepUnit::MemDepUnit() : iqPtr(NULL), stats(nullptr) {}
 
 MemDepUnit::MemDepUnit(const BaseO3CPUParams &params)
     : _name(params.name + ".memdepunit"),
-      depPred(params.store_set_clear_period, params.SSITSize,
-              params.LFSTSize,params.store_set_clear_thres,params.LFSTEntrySize),
+      depPred(params.store_set_clear_period, params.SSITSize, params.LFSTSize, params.store_set_clear_thres,
+              params.LFSTEntrySize),
       phastPred(params),
       iqPtr(NULL),
       enableReplayBasedMDP(params.EnableReplayBasedMDP),
@@ -98,13 +98,13 @@ MemDepUnit::~MemDepUnit()
 void
 MemDepUnit::init(const BaseO3CPUParams &params, ThreadID tid, CPU *cpu)
 {
-    DPRINTF(MemDepUnit, "Creating MemDepUnit %i object.\n",tid);
+    DPRINTF(MemDepUnit, "Creating MemDepUnit %i object.\n", tid);
 
     _name = csprintf("%s.memDep%d", params.name, tid);
     id = tid;
 
-    depPred.init(params.store_set_clear_period, params.store_set_clear_thres, params.SSITSize,
-            params.LFSTSize, params.LFSTEntrySize);
+    depPred.init(params.store_set_clear_period, params.store_set_clear_thres, params.SSITSize, params.LFSTSize,
+                 params.LFSTEntrySize);
     phastPred.init(params);
 
     enableReplayBasedMDP = params.EnableReplayBasedMDP;
@@ -118,33 +118,25 @@ MemDepUnit::init(const BaseO3CPUParams &params, ThreadID tid, CPU *cpu)
 
 MemDepUnit::MemDepUnitStats::MemDepUnitStats(statistics::Group *parent)
     : statistics::Group(parent),
-      ADD_STAT(insertedLoads, statistics::units::Count::get(),
-               "Number of loads inserted to the mem dependence unit."),
+      ADD_STAT(insertedLoads, statistics::units::Count::get(), "Number of loads inserted to the mem dependence unit."),
       ADD_STAT(insertedStores, statistics::units::Count::get(),
                "Number of stores inserted to the mem dependence unit."),
-      ADD_STAT(conflictingLoads, statistics::units::Count::get(),
-               "Number of conflicting loads."),
-      ADD_STAT(conflictingStores, statistics::units::Count::get(),
-               "Number of conflicting stores."),
-      ADD_STAT(dependentLoads, statistics::units::Count::get(),
-               "Number of  predicted conflicting loads."),
+      ADD_STAT(conflictingLoads, statistics::units::Count::get(), "Number of conflicting loads."),
+      ADD_STAT(conflictingStores, statistics::units::Count::get(), "Number of conflicting stores."),
+      ADD_STAT(dependentLoads, statistics::units::Count::get(), "Number of  predicted conflicting loads."),
       ADD_STAT(phastPredictions, statistics::units::Count::get(),
                "Number of PHAST predictions mapped to in-flight stores."),
       ADD_STAT(phastMappedStores, statistics::units::Count::get(),
                "Number of in-flight stores mapped from PHAST distances."),
-      ADD_STAT(phastViolationUpdates, statistics::units::Count::get(),
-               "Number of PHAST violation-driven updates."),
-      ADD_STAT(phastCommitUpdates, statistics::units::Count::get(),
-               "Number of PHAST commit-time confidence updates.")
+      ADD_STAT(phastViolationUpdates, statistics::units::Count::get(), "Number of PHAST violation-driven updates."),
+      ADD_STAT(phastCommitUpdates, statistics::units::Count::get(), "Number of PHAST commit-time confidence updates.")
 {
 }
 
 bool
 MemDepUnit::isDrained() const
 {
-    bool drained = instsToReplay.empty()
-                 && memDepHash.empty()
-                 && instsToReplay.empty();
+    bool drained = instsToReplay.empty() && memDepHash.empty() && instsToReplay.empty();
     for (int i = 0; i < MaxThreads; ++i)
         drained = drained && instList[i].empty();
 
@@ -198,13 +190,13 @@ MemDepUnit::insertBarrierSN(const DynInstPtr &barr_inst)
             barrier_type = "write";
 
         if (barrier_type) {
-            DPRINTF(MemDepUnit, "Inserted a %s barrier %s SN:%lli\n",
-                    barrier_type, barr_inst->pcState(), barr_sn);
+            DPRINTF(MemDepUnit, "Inserted a %s barrier %s SN:%lli\n", barrier_type, barr_inst->pcState(), barr_sn);
         }
 
         if (loadBarrierSNs.size() || storeBarrierSNs.size()) {
-            DPRINTF(MemDepUnit, "Outstanding load barriers = %d; "
-                                "store barriers = %d\n",
+            DPRINTF(MemDepUnit,
+                    "Outstanding load barriers = %d; "
+                    "store barriers = %d\n",
                     loadBarrierSNs.size(), storeBarrierSNs.size());
         }
     }
@@ -218,8 +210,7 @@ MemDepUnit::insert(const DynInstPtr &inst, const BranchHistory &branchHistory)
     MemDepEntryPtr inst_entry = std::make_shared<MemDepEntry>(inst);
 
     // Add the MemDepEntry to the hash.
-    memDepHash.insert(
-        std::pair<InstSeqNum, MemDepEntryPtr>(inst->seqNum, inst_entry));
+    memDepHash.insert(std::pair<InstSeqNum, MemDepEntryPtr>(inst->seqNum, inst_entry));
 #ifdef DEBUG
     MemDepEntry::memdep_insert++;
 #endif
@@ -238,14 +229,12 @@ MemDepUnit::insert(const DynInstPtr &inst, const BranchHistory &branchHistory)
         }
 
         const auto offset = static_cast<std::ptrdiff_t>(distance + 1);
-        if (inst->sqIt.idx() < inst->sqIt._cq->head() +
-                                   static_cast<size_t>(offset)) {
+        if (inst->sqIt.idx() < inst->sqIt._cq->head() + static_cast<size_t>(offset)) {
             return false;
         }
 
         auto sq_it = inst->sqIt - offset;
-        if (!sq_it.dereferenceable() || !sq_it->valid() ||
-            !sq_it->instruction()) {
+        if (!sq_it.dereferenceable() || !sq_it->valid() || !sq_it->instruction()) {
             return false;
         }
 
@@ -254,8 +243,8 @@ MemDepUnit::insert(const DynInstPtr &inst, const BranchHistory &branchHistory)
             return false;
         }
 
-        if (std::find(producing_stores.begin(), producing_stores.end(),
-                      store_inst->seqNum) != producing_stores.end()) {
+        if (std::find(producing_stores.begin(), producing_stores.end(), store_inst->seqNum) !=
+            producing_stores.end()) {
             return true;
         }
 
@@ -267,31 +256,20 @@ MemDepUnit::insert(const DynInstPtr &inst, const BranchHistory &branchHistory)
     // Check any barriers and the dependence predictor for any producing
     // memrefs/stores.
     if ((inst->isLoad() || inst->isAtomic()) && hasLoadBarrier()) {
-        DPRINTF(MemDepUnit, "%d load barriers in flight\n",
-                loadBarrierSNs.size());
-        producing_stores.insert(std::end(producing_stores),
-                                std::begin(loadBarrierSNs),
-                                std::end(loadBarrierSNs));
+        DPRINTF(MemDepUnit, "%d load barriers in flight\n", loadBarrierSNs.size());
+        producing_stores.insert(std::end(producing_stores), std::begin(loadBarrierSNs), std::end(loadBarrierSNs));
     } else if ((inst->isStore() || inst->isAtomic()) && hasStoreBarrier()) {
-        DPRINTF(MemDepUnit, "%d store barriers in flight\n",
-                storeBarrierSNs.size());
-        producing_stores.insert(std::end(producing_stores),
-                                std::begin(storeBarrierSNs),
-                                std::end(storeBarrierSNs));
+        DPRINTF(MemDepUnit, "%d store barriers in flight\n", storeBarrierSNs.size());
+        producing_stores.insert(std::end(producing_stores), std::begin(storeBarrierSNs), std::end(storeBarrierSNs));
     } else if (inst->isLoad()) {
         if (enablePHASTMDP) {
-            phast_pred = phastPred.checkInst(inst->pcState().instAddr(),
-                                             inst->seqNum, branchHistory,
-                                             inst->isLoad());
-            bool first_mapped =
-                mapDistanceToStore(phast_pred.storeQueueDistances.first);
-            bool second_mapped =
-                mapDistanceToStore(phast_pred.storeQueueDistances.second);
+            phast_pred = phastPred.checkInst(inst->pcState().instAddr(), inst->seqNum, branchHistory, inst->isLoad());
+            bool first_mapped = mapDistanceToStore(phast_pred.storeQueueDistances.first);
+            bool second_mapped = mapDistanceToStore(phast_pred.storeQueueDistances.second);
             mdp_pred = first_mapped || second_mapped;
             if (mdp_pred) {
                 inst->memDepInfo.predicted = true;
-                inst->memDepInfo.predBranchHistLength =
-                    phast_pred.predBranchHistLength;
+                inst->memDepInfo.predBranchHistLength = phast_pred.predBranchHistLength;
                 inst->memDepInfo.predictorHash = phast_pred.predictorHash;
                 ++stats.phastPredictions;
             } else {
@@ -318,8 +296,7 @@ MemDepUnit::insert(const DynInstPtr &inst, const BranchHistory &branchHistory)
 
     std::vector<MemDepEntryPtr> store_entries;
     for (auto producing_store : producing_stores) {
-        DPRINTF(MemDepUnit, "Searching for producer [sn:%lli]\n",
-                            producing_store);
+        DPRINTF(MemDepUnit, "Searching for producer [sn:%lli]\n", producing_store);
         MemDepHashIt hash_it = memDepHash.find(producing_store);
 
         if (hash_it != memDepHash.end()) {
@@ -329,17 +306,19 @@ MemDepUnit::insert(const DynInstPtr &inst, const BranchHistory &branchHistory)
     }
 
     if (store_entries.empty()) {
-        DPRINTF(MemDepUnit, "No dependency for inst PC "
-                "%s [sn:%lli].\n", inst->pcState(), inst->seqNum);
+        DPRINTF(MemDepUnit,
+                "No dependency for inst PC "
+                "%s [sn:%lli].\n",
+                inst->pcState(), inst->seqNum);
 
         assert(inst_entry->memDeps == 0);
 
         inst->issueQue->markMemDepDone(inst);
     } else if (enableReplayBasedMDP && inst->isLoad() && mdp_pred) {
-        DPRINTF(MemDepUnit, "Replay-based MDP: bypass IQ stall for load PC "
+        DPRINTF(MemDepUnit,
+                "Replay-based MDP: bypass IQ stall for load PC "
                 "%s [sn:%lli], predicted producers: %lu, strict: %d\n",
-                inst->pcState(), inst->seqNum, producing_stores.size(),
-                strict_wait);
+                inst->pcState(), inst->seqNum, producing_stores.size(), strict_wait);
 
         inst->issueQue->markMemDepDone(inst);
 
@@ -347,8 +326,7 @@ MemDepUnit::insert(const DynInstPtr &inst, const BranchHistory &branchHistory)
     } else {
         DPRINTF(MemDepUnit, "Adding to dependency list\n");
         for ([[maybe_unused]] auto producing_store : producing_stores)
-            DPRINTF(MemDepUnit, "\tinst PC %s is dependent on [sn:%lli].\n",
-                inst->pcState(), producing_store);
+            DPRINTF(MemDepUnit, "\tinst PC %s is dependent on [sn:%lli].\n", inst->pcState(), producing_store);
 
         for (auto store_entry : store_entries)
             store_entry->dependInsts.push_back(inst_entry);
@@ -366,15 +344,12 @@ MemDepUnit::insert(const DynInstPtr &inst, const BranchHistory &branchHistory)
     insertBarrierSN(inst);
 
     if (inst->isStore() || inst->isAtomic()) {
-        DPRINTF(MemDepUnit, "Inserting store/atomic PC %s [sn:%lli].\n",
-                inst->pcState(), inst->seqNum);
+        DPRINTF(MemDepUnit, "Inserting store/atomic PC %s [sn:%lli].\n", inst->pcState(), inst->seqNum);
 
         if (enablePHASTMDP) {
-            phastPred.insertStore(inst->pcState().instAddr(), inst->seqNum,
-                                  inst->threadNumber);
+            phastPred.insertStore(inst->pcState().instAddr(), inst->seqNum, inst->threadNumber);
         } else {
-            depPred.insertStore(inst->pcState().instAddr(), inst->seqNum,
-                    inst->threadNumber, cpu->curCycle());
+            depPred.insertStore(inst->pcState().instAddr(), inst->seqNum, inst->threadNumber, cpu->curCycle());
         }
 
         ++stats.insertedStores;
@@ -393,15 +368,12 @@ MemDepUnit::insertNonSpec(const DynInstPtr &inst)
     // Might want to turn this part into an inline function or something.
     // It's shared between both insert functions.
     if (inst->isStore() || inst->isAtomic()) {
-        DPRINTF(MemDepUnit, "Inserting store/atomic PC %s [sn:%lli].\n",
-                inst->pcState(), inst->seqNum);
+        DPRINTF(MemDepUnit, "Inserting store/atomic PC %s [sn:%lli].\n", inst->pcState(), inst->seqNum);
 
         if (enablePHASTMDP) {
-            phastPred.insertStore(inst->pcState().instAddr(), inst->seqNum,
-                                  inst->threadNumber);
+            phastPred.insertStore(inst->pcState().instAddr(), inst->seqNum, inst->threadNumber);
         } else {
-            depPred.insertStore(inst->pcState().instAddr(), inst->seqNum,
-                    inst->threadNumber, cpu->curCycle());
+            depPred.insertStore(inst->pcState().instAddr(), inst->seqNum, inst->threadNumber, cpu->curCycle());
         }
 
         ++stats.insertedStores;
@@ -420,8 +392,7 @@ MemDepUnit::insertBarrier(const DynInstPtr &barr_inst)
     MemDepEntryPtr inst_entry = std::make_shared<MemDepEntry>(barr_inst);
 
     // Add the MemDepEntry to the hash.
-    memDepHash.insert(
-        std::pair<InstSeqNum, MemDepEntryPtr>(barr_inst->seqNum, inst_entry));
+    memDepHash.insert(std::pair<InstSeqNum, MemDepEntryPtr>(barr_inst->seqNum, inst_entry));
 #ifdef DEBUG
     MemDepEntry::memdep_insert++;
 #endif
@@ -437,13 +408,11 @@ MemDepUnit::insertBarrier(const DynInstPtr &barr_inst)
 void
 MemDepUnit::regsReady(const DynInstPtr &inst)
 {
-
 }
 
 void
 MemDepUnit::nonSpecInstReady(const DynInstPtr &inst)
 {
-
 }
 
 void
@@ -463,8 +432,7 @@ MemDepUnit::replay()
 
         MemDepEntryPtr inst_entry = findInHash(temp_inst);
 
-        DPRINTF(MemDepUnit, "Replaying mem instruction PC %s [sn:%lli].\n",
-                temp_inst->pcState(), temp_inst->seqNum);
+        DPRINTF(MemDepUnit, "Replaying mem instruction PC %s [sn:%lli].\n", temp_inst->pcState(), temp_inst->seqNum);
 
         inst_entry->inst->issueQue->retryMem(inst_entry->inst);
 
@@ -475,8 +443,7 @@ MemDepUnit::replay()
 void
 MemDepUnit::completed(const DynInstPtr &inst)
 {
-    DPRINTF(MemDepUnit, "Completed mem instruction PC %s [sn:%lli].\n",
-            inst->pcState(), inst->seqNum);
+    DPRINTF(MemDepUnit, "Completed mem instruction PC %s [sn:%lli].\n", inst->pcState(), inst->seqNum);
 
     ThreadID tid = inst->threadNumber;
 
@@ -520,8 +487,7 @@ MemDepUnit::completeInst(const DynInstPtr &inst)
             barrier_type = "Read";
 
         if (barrier_type) {
-            DPRINTF(MemDepUnit, "%s barrier completed: %s SN:%lli\n",
-                                barrier_type, inst->pcState(), inst->seqNum);
+            DPRINTF(MemDepUnit, "%s barrier completed: %s SN:%lli\n", barrier_type, inst->pcState(), inst->seqNum);
         }
     }
 }
@@ -530,15 +496,15 @@ void
 MemDepUnit::wakeDependents(const DynInstPtr &inst)
 {
     // Only stores, atomics and barriers have dependents.
-    if (!inst->isStore() && !inst->isAtomic() && !inst->isReadBarrier() &&
-        !inst->isWriteBarrier() && !inst->isHtmCmd()) {
+    if (!inst->isStore() && !inst->isAtomic() && !inst->isReadBarrier() && !inst->isWriteBarrier() &&
+        !inst->isHtmCmd()) {
         return;
     }
 
     MemDepEntryPtr inst_entry = findInHash(inst);
     stats.dependentLoads += inst_entry->dependInsts.size();
 
-    for (int i = 0; i < inst_entry->dependInsts.size(); ++i ) {
+    for (int i = 0; i < inst_entry->dependInsts.size(); ++i) {
         MemDepEntryPtr woken_inst = inst_entry->dependInsts[i];
 
         if (!woken_inst->inst) {
@@ -546,7 +512,8 @@ MemDepUnit::wakeDependents(const DynInstPtr &inst)
             continue;
         }
 
-        DPRINTF(MemDepUnit, "Waking up a dependent inst, "
+        DPRINTF(MemDepUnit,
+                "Waking up a dependent inst, "
                 "[sn:%lli].\n",
                 woken_inst->inst->seqNum);
 
@@ -556,8 +523,7 @@ MemDepUnit::wakeDependents(const DynInstPtr &inst)
                 info.predStoreAddrs.first = inst->effAddr;
                 info.predStoreSizes.first = inst->effSize;
             } else if (info.predStoreSizes.second == 0 &&
-                       (info.predStoreAddrs.first != inst->effAddr ||
-                        info.predStoreSizes.first != inst->effSize)) {
+                       (info.predStoreAddrs.first != inst->effAddr || info.predStoreSizes.first != inst->effSize)) {
                 info.predStoreAddrs.second = inst->effAddr;
                 info.predStoreSizes.second = inst->effSize;
             }
@@ -566,8 +532,7 @@ MemDepUnit::wakeDependents(const DynInstPtr &inst)
         assert(woken_inst->memDeps > 0);
         woken_inst->memDeps -= 1;
 
-        if ((woken_inst->memDeps == 0) &&
-            !woken_inst->squashed) {
+        if ((woken_inst->memDeps == 0) && !woken_inst->squashed) {
             woken_inst->inst->issueQue->markMemDepDone(woken_inst->inst);
         }
     }
@@ -575,15 +540,12 @@ MemDepUnit::wakeDependents(const DynInstPtr &inst)
     inst_entry->dependInsts.clear();
 }
 
-MemDepUnit::MemDepEntry::MemDepEntry(const DynInstPtr &new_inst) :
-    inst(new_inst)
+MemDepUnit::MemDepEntry::MemDepEntry(const DynInstPtr &new_inst) : inst(new_inst)
 {
 #ifdef DEBUG
     ++memdep_count;
 
-    DPRINTF(MemDepUnit,
-            "Memory dependency entry created. memdep_count=%i %s\n",
-            memdep_count, inst->pcState());
+    DPRINTF(MemDepUnit, "Memory dependency entry created. memdep_count=%i %s\n", memdep_count, inst->pcState());
 #endif
 }
 
@@ -595,9 +557,7 @@ MemDepUnit::MemDepEntry::~MemDepEntry()
 #ifdef DEBUG
     --memdep_count;
 
-    DPRINTF(MemDepUnit,
-            "Memory dependency entry deleted. memdep_count=%i %s\n",
-            memdep_count, inst->pcState());
+    DPRINTF(MemDepUnit, "Memory dependency entry deleted. memdep_count=%i %s\n", memdep_count, inst->pcState());
 #endif
 }
 
@@ -607,8 +567,7 @@ MemDepUnit::squash(const InstSeqNum &squashed_num, ThreadID tid)
     if (!instsToReplay.empty()) {
         ListIt replay_it = instsToReplay.begin();
         while (replay_it != instsToReplay.end()) {
-            if ((*replay_it)->threadNumber == tid &&
-                (*replay_it)->seqNum > squashed_num) {
+            if ((*replay_it)->threadNumber == tid && (*replay_it)->seqNum > squashed_num) {
                 instsToReplay.erase(replay_it++);
             } else {
                 ++replay_it;
@@ -621,11 +580,9 @@ MemDepUnit::squash(const InstSeqNum &squashed_num, ThreadID tid)
 
     MemDepHashIt hash_it;
 
-    while (!instList[tid].empty() &&
-           (*squash_it)->seqNum > squashed_num) {
+    while (!instList[tid].empty() && (*squash_it)->seqNum > squashed_num) {
 
-        DPRINTF(MemDepUnit, "Squashing inst [sn:%lli]\n",
-                (*squash_it)->seqNum);
+        DPRINTF(MemDepUnit, "Squashing inst [sn:%lli]\n", (*squash_it)->seqNum);
 
         loadBarrierSNs.erase((*squash_it)->seqNum);
 
@@ -656,20 +613,23 @@ MemDepUnit::squash(const InstSeqNum &squashed_num, ThreadID tid)
 }
 
 void
-MemDepUnit::violation(InstSeqNum store_seq_num, Addr store_pc,
-        const DynInstPtr &violating_load, const BranchHistory &branchHistory)
+MemDepUnit::violation(InstSeqNum store_seq_num, Addr store_pc, const DynInstPtr &violating_load,
+                      const BranchHistory &branchHistory)
 {
-    DPRINTF(MemDepUnit, "Passing violating PCs to mem dep predictor,"
+    DPRINTF(MemDepUnit,
+            "Passing violating PCs to mem dep predictor,"
             " load: %#x, store: %#x [sn:%lli]\n",
             violating_load->pcState().instAddr(), store_pc, store_seq_num);
 
     if (enablePHASTMDP) {
-        phastPred.violation(violating_load->pcState().instAddr(),
-                violating_load->seqNum, store_seq_num, store_pc,
-                violating_load->memDepInfo.storeQueueDistance,
-                violating_load->memDepInfo.predicted,
-                violating_load->memDepInfo.predBranchHistLength,
-                violating_load->memDepInfo.predictorHash, branchHistory);
+        if (violating_load->memDepInfo.violationTrained || violating_load->memDepInfo.storeQueueDistance < 0) {
+            return;
+        }
+        phastPred.violation(violating_load->pcState().instAddr(), violating_load->seqNum, store_seq_num, store_pc,
+                            violating_load->memDepInfo.storeQueueDistance, violating_load->memDepInfo.predicted,
+                            violating_load->memDepInfo.predBranchHistLength, violating_load->memDepInfo.predictorHash,
+                            branchHistory);
+        violating_load->memDepInfo.violationTrained = true;
         ++stats.phastViolationUpdates;
     } else {
         depPred.violation(store_pc, violating_load->pcState().instAddr());
@@ -679,15 +639,12 @@ MemDepUnit::violation(InstSeqNum store_seq_num, Addr store_pc,
 void
 MemDepUnit::issue(const DynInstPtr &inst)
 {
-    DPRINTF(MemDepUnit, "Issuing instruction PC %#x [sn:%lli].\n",
-            inst->pcState().instAddr(), inst->seqNum);
+    DPRINTF(MemDepUnit, "Issuing instruction PC %#x [sn:%lli].\n", inst->pcState().instAddr(), inst->seqNum);
 
     if (enablePHASTMDP) {
-        phastPred.issued(inst->pcState().instAddr(), inst->seqNum,
-                         inst->isStore());
+        phastPred.issued(inst->pcState().instAddr(), inst->seqNum, inst->isStore());
     } else {
-        depPred.issued(inst->pcState().instAddr(), inst->seqNum,
-                       inst->isStore());
+        depPred.issued(inst->pcState().instAddr(), inst->seqNum, inst->isStore());
     }
 }
 
@@ -698,11 +655,9 @@ MemDepUnit::commit(const DynInstPtr &inst)
         return;
     }
 
-    phastPred.commit(inst->pcState().instAddr(), inst->effAddr, inst->effSize,
-            inst->memDepInfo.predStoreAddrs,
-            inst->memDepInfo.predStoreSizes,
-            inst->memDepInfo.predBranchHistLength,
-            inst->memDepInfo.predictorHash);
+    phastPred.commit(inst->pcState().instAddr(), inst->effAddr, inst->effSize, inst->memDepInfo.predStoreAddrs,
+                     inst->memDepInfo.predStoreSizes, inst->memDepInfo.predBranchHistLength,
+                     inst->memDepInfo.predictorHash);
     ++stats.phastCommitUpdates;
 }
 
@@ -720,20 +675,17 @@ void
 MemDepUnit::dumpLists()
 {
     for (ThreadID tid = 0; tid < MaxThreads; tid++) {
-        cprintf("Instruction list %i size: %i\n",
-                tid, instList[tid].size());
+        cprintf("Instruction list %i size: %i\n", tid, instList[tid].size());
 
         ListIt inst_list_it = instList[tid].begin();
         int num = 0;
 
         while (inst_list_it != instList[tid].end()) {
-            cprintf("Instruction:%i\nPC: %s\n[sn:%llu]\n[tid:%i]\nIssued:%i\n"
-                    "Squashed:%i\n\n",
-                    num, (*inst_list_it)->pcState(),
-                    (*inst_list_it)->seqNum,
-                    (*inst_list_it)->threadNumber,
-                    (*inst_list_it)->isIssued(),
-                    (*inst_list_it)->isSquashed());
+            cprintf(
+                "Instruction:%i\nPC: %s\n[sn:%llu]\n[tid:%i]\nIssued:%i\n"
+                "Squashed:%i\n\n",
+                num, (*inst_list_it)->pcState(), (*inst_list_it)->seqNum, (*inst_list_it)->threadNumber,
+                (*inst_list_it)->isIssued(), (*inst_list_it)->isSquashed());
             inst_list_it++;
             ++num;
         }
@@ -746,5 +698,5 @@ MemDepUnit::dumpLists()
 #endif
 }
 
-} // namespace o3
-} // namespace gem5
+}  // namespace o3
+}  // namespace gem5
