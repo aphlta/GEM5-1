@@ -435,7 +435,7 @@ class DynInst
         /** Zero-based distance from the load to the violating older store. */
         std::ptrdiff_t storeQueueDistance = -1;
 
-        /** Store addresses/sizes used to validate a PHAST prediction. */
+        /** Store addresses/sizes used to validate an MDP prediction. */
         std::pair<Addr, Addr> predStoreAddrs = {0, 0};
         std::pair<unsigned, unsigned> predStoreSizes = {0, 0};
 
@@ -443,8 +443,11 @@ class DynInst
         unsigned predBranchHistLength = 0;
         uint64_t predictorHash = 0;
 
-        /** True when this load received a valid PHAST prediction. */
+        /** True when this load received a valid concrete MDP prediction. */
         bool predicted = false;
+
+        /** True after the RAW violation has been counted once. */
+        bool violationCounted = false;
 
         /** True after the RAW violation has trained PHAST once. */
         bool violationTrained = false;

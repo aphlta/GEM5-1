@@ -66,6 +66,7 @@ MemDepUnit::MemDepUnit(const BaseO3CPUParams &params)
       enableReplayBasedMDP(params.EnableReplayBasedMDP),
       enableMDPStrictWait(params.EnableMDPStrictWait),
       enablePHASTMDP(params.EnablePHASTMDP),
+      depCheckShift(params.LSQDepCheckShift),
       stats(nullptr)
 {
     DPRINTF(MemDepUnit, "Creating MemDepUnit object.\n");
@@ -107,6 +108,7 @@ MemDepUnit::init(const BaseO3CPUParams &params, ThreadID tid, CPU *cpu)
                  params.LFSTEntrySize);
     phastPred.init(params);
 
+    depCheckShift = params.LSQDepCheckShift;
     enableReplayBasedMDP = params.EnableReplayBasedMDP;
     enableMDPStrictWait = params.EnableMDPStrictWait;
     enablePHASTMDP = params.EnablePHASTMDP;
@@ -128,8 +130,20 @@ MemDepUnit::MemDepUnitStats::MemDepUnitStats(statistics::Group *parent)
                "Number of PHAST predictions mapped to in-flight stores."),
       ADD_STAT(phastMappedStores, statistics::units::Count::get(),
                "Number of in-flight stores mapped from PHAST distances."),
+      ADD_STAT(phastTableHits, statistics::units::Count::get(),
+               "Number of PHAST table hits returning a valid distance."),
+      ADD_STAT(phastEffectivePreds, statistics::units::Count::get(),
+               "Number of PHAST hits that mapped to an in-flight store."),
+      ADD_STAT(phastDropInvalidSQDistance, statistics::units::Count::get(),
+               "Number of PHAST hits dropped because the target store could not be located."),
       ADD_STAT(phastViolationUpdates, statistics::units::Count::get(), "Number of PHAST violation-driven updates."),
-      ADD_STAT(phastCommitUpdates, statistics::units::Count::get(), "Number of PHAST commit-time confidence updates.")
+      ADD_STAT(phastCommitUpdates, statistics::units::Count::get(), "Number of PHAST commit-time confidence updates."),
+      ADD_STAT(mdpUnpredictedViolations, statistics::units::Count::get(),
+               "Number of RAW violations with no MDP prediction."),
+      ADD_STAT(mdpPredictedViolations, statistics::units::Count::get(),
+               "Number of RAW violations with an MDP prediction."),
+      ADD_STAT(mdpFalseDepAtCommit, statistics::units::Count::get(),
+               "Number of predicted loads that turned out not to conflict at commit.")
 {
 }
 
@@ -221,6 +235,7 @@ MemDepUnit::insert(const DynInstPtr &inst, const BranchHistory &branchHistory)
     std::vector<InstSeqNum> producing_stores;
     bool mdp_pred = false;
     bool strict_wait = false;
+    bool phast_table_hit = false;
     PHASTPredictionResult phast_pred;
 
     auto mapDistanceToStore = [&](std::ptrdiff_t distance) {
@@ -264,17 +279,14 @@ MemDepUnit::insert(const DynInstPtr &inst, const BranchHistory &branchHistory)
     } else if (inst->isLoad()) {
         if (enablePHASTMDP) {
             phast_pred = phastPred.checkInst(inst->pcState().instAddr(), inst->seqNum, branchHistory, inst->isLoad());
+            phast_table_hit = phast_pred.storeQueueDistances.first >= 0 ||
+                              phast_pred.storeQueueDistances.second >= 0;
+            if (phast_table_hit) {
+                ++stats.phastTableHits;
+            }
             bool first_mapped = mapDistanceToStore(phast_pred.storeQueueDistances.first);
             bool second_mapped = mapDistanceToStore(phast_pred.storeQueueDistances.second);
             mdp_pred = first_mapped || second_mapped;
-            if (mdp_pred) {
-                inst->memDepInfo.predicted = true;
-                inst->memDepInfo.predBranchHistLength = phast_pred.predBranchHistLength;
-                inst->memDepInfo.predictorHash = phast_pred.predictorHash;
-                ++stats.phastPredictions;
-            } else {
-                inst->memDepInfo.predicted = false;
-            }
         } else {
             mdp_pred = true;
             producing_stores = depPred.checkInst(inst->pcState().instAddr());
@@ -305,7 +317,25 @@ MemDepUnit::insert(const DynInstPtr &inst, const BranchHistory &branchHistory)
         }
     }
 
+    const bool concrete_prediction = inst->isLoad() && mdp_pred &&
+        !producing_stores.empty() && !store_entries.empty();
+    if (inst->isLoad()) {
+        inst->memDepInfo.predicted = concrete_prediction;
+        if (enablePHASTMDP && concrete_prediction) {
+            inst->memDepInfo.predBranchHistLength = phast_pred.predBranchHistLength;
+            inst->memDepInfo.predictorHash = phast_pred.predictorHash;
+            ++stats.phastEffectivePreds;
+            ++stats.phastPredictions;
+        } else if (!concrete_prediction) {
+            inst->memDepInfo.predBranchHistLength = 0;
+            inst->memDepInfo.predictorHash = 0;
+        }
+    }
+
     if (store_entries.empty()) {
+        if (enablePHASTMDP && phast_table_hit) {
+            ++stats.phastDropInvalidSQDistance;
+        }
         DPRINTF(MemDepUnit,
                 "No dependency for inst PC "
                 "%s [sn:%lli].\n",
@@ -621,13 +651,29 @@ MemDepUnit::violation(InstSeqNum store_seq_num, Addr store_pc, const DynInstPtr 
             " load: %#x, store: %#x [sn:%lli]\n",
             violating_load->pcState().instAddr(), store_pc, store_seq_num);
 
+    const bool had_mdp_prediction = violating_load->memDepInfo.predicted ||
+                                    violating_load->mdpPredStrictWait ||
+                                    !violating_load->mdpProducingStores.empty();
+    if (!violating_load->memDepInfo.violationCounted) {
+        if (had_mdp_prediction) {
+            ++stats.mdpPredictedViolations;
+        } else {
+            ++stats.mdpUnpredictedViolations;
+        }
+        violating_load->memDepInfo.violationCounted = true;
+    }
+
     if (enablePHASTMDP) {
-        if (violating_load->memDepInfo.violationTrained || violating_load->memDepInfo.storeQueueDistance < 0) {
+        if (violating_load->memDepInfo.violationTrained ||
+            violating_load->memDepInfo.storeQueueDistance < 0) {
             return;
         }
-        phastPred.violation(violating_load->pcState().instAddr(), violating_load->seqNum, store_seq_num, store_pc,
-                            violating_load->memDepInfo.storeQueueDistance, violating_load->memDepInfo.predicted,
-                            violating_load->memDepInfo.predBranchHistLength, violating_load->memDepInfo.predictorHash,
+        phastPred.violation(violating_load->pcState().instAddr(),
+                            violating_load->seqNum, store_seq_num, store_pc,
+                            violating_load->memDepInfo.storeQueueDistance,
+                            violating_load->memDepInfo.predicted,
+                            violating_load->memDepInfo.predBranchHistLength,
+                            violating_load->memDepInfo.predictorHash,
                             branchHistory);
         violating_load->memDepInfo.violationTrained = true;
         ++stats.phastViolationUpdates;
@@ -651,14 +697,41 @@ MemDepUnit::issue(const DynInstPtr &inst)
 void
 MemDepUnit::commit(const DynInstPtr &inst)
 {
-    if (!enablePHASTMDP || !inst->isLoad() || !inst->memDepInfo.predicted) {
+    if (!inst->isLoad() || !inst->memDepInfo.predicted) {
         return;
     }
 
-    phastPred.commit(inst->pcState().instAddr(), inst->effAddr, inst->effSize, inst->memDepInfo.predStoreAddrs,
-                     inst->memDepInfo.predStoreSizes, inst->memDepInfo.predBranchHistLength,
-                     inst->memDepInfo.predictorHash);
-    ++stats.phastCommitUpdates;
+    auto overlaps = [this](Addr a0, unsigned s0, Addr a1, unsigned s1) {
+        if (s0 == 0 || s1 == 0) {
+            return false;
+        }
+        const Addr l0 = a0 >> depCheckShift;
+        const Addr l1 = (a0 + s0 - 1) >> depCheckShift;
+        const Addr r0 = a1 >> depCheckShift;
+        const Addr r1 = (a1 + s1 - 1) >> depCheckShift;
+        return r1 >= l0 && r0 <= l1;
+    };
+
+    const bool has_predicted_store = inst->memDepInfo.predStoreSizes.first != 0 ||
+                                     inst->memDepInfo.predStoreSizes.second != 0;
+    const bool false_dep = has_predicted_store &&
+        !overlaps(inst->effAddr, inst->effSize, inst->memDepInfo.predStoreAddrs.first,
+                  inst->memDepInfo.predStoreSizes.first) &&
+        !overlaps(inst->effAddr, inst->effSize, inst->memDepInfo.predStoreAddrs.second,
+                  inst->memDepInfo.predStoreSizes.second);
+
+    if (false_dep) {
+        ++stats.mdpFalseDepAtCommit;
+    }
+
+    if (enablePHASTMDP) {
+        phastPred.commit(inst->pcState().instAddr(), inst->effAddr, inst->effSize,
+                         inst->memDepInfo.predStoreAddrs,
+                         inst->memDepInfo.predStoreSizes,
+                         inst->memDepInfo.predBranchHistLength,
+                         inst->memDepInfo.predictorHash);
+        ++stats.phastCommitUpdates;
+    }
 }
 
 MemDepUnit::MemDepEntryPtr &
